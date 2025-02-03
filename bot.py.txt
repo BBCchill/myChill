@@ -1,0 +1,112 @@
+import sqlite3
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import Message
+from aiogram.filters import Command
+from aiogram.utils import executor
+from datetime import datetime
+
+# Твой токен от BotFather
+TOKEN = "7867876643:AAG9jE7ANXoS73vws1yb1y3xo-_TSQGDM2M"
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+
+# Создаем объекты бота и диспетчера
+bot = Bot(token=TOKEN)
+dp = Dispatcher(bot)
+
+# Инициализация базы данных
+conn = sqlite3.connect("finance.db")
+cursor = conn.cursor()
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    amount REAL,
+    category TEXT,
+    date TEXT,
+    type TEXT
+)
+''')
+conn.commit()
+
+# Добавление транзакции (доход/расход)
+async def add_transaction(amount, category, type_, message: Message):
+    date = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("INSERT INTO transactions (amount, category, date, type) VALUES (?, ?, ?, ?)",
+                   (amount, category, date, type_))
+    conn.commit()
+    await message.reply("✅ Транзакция добавлена!")
+
+# Команда для добавления дохода
+@dp.message(Command("add_income"))
+async def add_income(message: Message):
+    try:
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.reply("⚠️ Используй формат: `/add_income сумма категория`")
+            return
+        amount = float(parts[1])
+        category = " ".join(parts[2:])
+        await add_transaction(amount, category, "доход", message)
+    except ValueError:
+        await message.reply("⚠️ Ошибка: сумма должна быть числом.")
+
+# Команда для добавления расхода
+@dp.message(Command("add_expense"))
+async def add_expense(message: Message):
+    try:
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.reply("⚠️ Используй формат: `/add_expense сумма категория`")
+            return
+        amount = float(parts[1])
+        category = " ".join(parts[2:])
+        await add_transaction(-amount, category, "расход", message)
+    except ValueError:
+        await message.reply("⚠️ Ошибка: сумма должна быть числом.")
+
+# Команда для просмотра баланса
+@dp.message(Command("balance"))
+async def get_balance(message: Message):
+    cursor.execute("SELECT SUM(amount) FROM transactions WHERE type = 'доход'")
+    total_income = cursor.fetchone()[0] or 0
+
+    cursor.execute("SELECT SUM(amount) FROM transactions WHERE type = 'расход'")
+    total_expense = cursor.fetchone()[0] or 0
+
+    balance = total_income - total_expense
+    await message.reply(f"💰 Текущий баланс: {balance:.2f} руб.")
+
+# Команда для отчета за период
+@dp.message(Command("report"))
+async def get_report(message: Message):
+    try:
+        parts = message.text.split()
+        if len(parts) < 3:
+            await message.reply("⚠️ Используй формат: `/report ГГГГ-ММ-ДД ГГГГ-ММ-ДД`")
+            return
+        start_date = parts[1]
+        end_date = parts[2]
+
+        cursor.execute("SELECT date, type, amount, category FROM transactions WHERE date BETWEEN ? AND ?",
+                       (start_date, end_date))
+        transactions = cursor.fetchall()
+
+        if not transactions:
+            await message.reply("📊 За указанный период транзакций не найдено.")
+            return
+
+        report_text = "📊 Отчет за период {} — {}\n".format(start_date, end_date)
+        report_text += "-" * 30 + "\n"
+        for t in transactions:
+            report_text += f"{t[0]} | {t[1]} | {t[2]:.2f} руб. | {t[3]}\n"
+        report_text += "-" * 30
+
+        await message.reply(report_text)
+    except Exception as e:
+        await message.reply(f"⚠️ Ошибка: {str(e)}")
+
+# Запуск бота
+if name == "__main__":
+    executor.start_polling(dp, skip_updates=True)
